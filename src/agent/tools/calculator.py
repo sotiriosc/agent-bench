@@ -1,11 +1,12 @@
 # src/agent/tools/calculator.py
 from __future__ import annotations
 
-import os
-import re
 import ast
 import operator as _op
-from typing import Optional, Union, Any
+import os
+import re
+from typing import Any, Optional, Union
+
 
 # -----------------------------
 # Debug helper
@@ -13,6 +14,7 @@ from typing import Optional, Union, Any
 def _dbg(msg: str) -> None:
     if os.environ.get("AGENT_DEBUG"):
         print(f"[DEBUG calculator] {msg}")
+
 
 # -----------------------------
 # Normalization
@@ -25,6 +27,7 @@ UNICODE_MAP = {
     "÷": "/",  # divide
 }
 
+
 def _normalize(s: str) -> str:
     # unify common unicode math glyphs
     for k, v in UNICODE_MAP.items():
@@ -35,12 +38,13 @@ def _normalize(s: str) -> str:
     s = re.sub(r"(?<=\d),(?=\d{3}\b)", "", s)
     return s
 
+
 # -----------------------------
 # Limits / guards
 # -----------------------------
-MAX_EXP = 10          # max exponent magnitude
-MAX_ABS = 10 ** 12    # max base magnitude for exponentiation
-MAX_EXPR_LEN = 512    # overall expression text length
+MAX_EXP = 10  # max exponent magnitude
+MAX_ABS = 10**12  # max base magnitude for exponentiation
+MAX_EXPR_LEN = 512  # overall expression text length
 
 # -----------------------------
 # Expression extraction
@@ -62,6 +66,7 @@ GENERIC_EXPR = re.compile(
     re.U,
 )
 
+
 def _longest_match(pattern: re.Pattern, text: str) -> Optional[str]:
     best = None
     best_len = -1
@@ -71,6 +76,7 @@ def _longest_match(pattern: re.Pattern, text: str) -> Optional[str]:
             best = seg
             best_len = len(seg)
     return best
+
 
 def extract_expr(text: str) -> Optional[str]:
     """
@@ -97,7 +103,9 @@ def extract_expr(text: str) -> Optional[str]:
     if candidate:
         expr = candidate.strip()
         # Heuristic sanity: must contain a digit and at least one operator/paren
-        if any(ch.isdigit() for ch in expr) and any(op in expr for op in ("+", "-", "*", "/", "(", ")")):
+        if any(ch.isdigit() for ch in expr) and any(
+            op in expr for op in ("+", "-", "*", "/", "(", ")")
+        ):
             if len(expr) > MAX_EXPR_LEN:
                 raise ValueError("expression too long")
             # If trailing operator snuck in (e.g., '23*17 +'), trim it
@@ -105,6 +113,7 @@ def extract_expr(text: str) -> Optional[str]:
             return expr or None
 
     return None
+
 
 # -----------------------------
 # Safe evaluation (AST)
@@ -123,6 +132,7 @@ _ALLOWED_UNARYOPS = {
 }
 
 Number = Union[int, float]
+
 
 def _safe_eval(node: ast.AST) -> Number:
     # Numbers: Constant in py3.8+; Num for older ASTs
@@ -147,7 +157,7 @@ def _safe_eval(node: ast.AST) -> Number:
         # Intercept exponent first to apply limits
         if isinstance(node.op, ast.Pow):
             base = _safe_eval(node.left)
-            exp  = _safe_eval(node.right)
+            exp = _safe_eval(node.right)
             if not isinstance(base, (int, float)) or not isinstance(exp, (int, float)):
                 raise ValueError("invalid power")
             if abs(exp) > MAX_EXP or abs(base) > MAX_ABS:
@@ -165,6 +175,7 @@ def _safe_eval(node: ast.AST) -> Number:
 
     # Explicitly forbid everything else (names, calls, attrs, etc.)
     raise ValueError("invalid expression")
+
 
 def evaluate(expr: str) -> Number:
     """
@@ -192,6 +203,7 @@ def evaluate(expr: str) -> Number:
     if isinstance(result, float) and result.is_integer():
         return int(result)
     return result
+
 
 # -----------------------------
 # Public API expected by executor / tests
@@ -236,6 +248,7 @@ def calc(text: Any) -> Number:
 
     return evaluate(expr)
 
+
 # Legacy/expected public name from tests/CLI: return **string** here.
 def execute(text: Any) -> str:
     """
@@ -244,5 +257,6 @@ def execute(text: Any) -> str:
     """
     result = calc(text)
     return str(result)
+
 
 __all__ = ["extract_expr", "evaluate", "calc", "execute"]

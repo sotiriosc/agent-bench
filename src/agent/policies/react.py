@@ -1,5 +1,6 @@
 from ..tools.calculator import calc
 
+
 class ReActPolicy:
     def decide(self, state):
         messages = state.get("messages", [])

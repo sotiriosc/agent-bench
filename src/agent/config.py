@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+
 @dataclass
 class AgentConfig:
     model_provider: str = "local-dummy"  # 'openai', 'anthropic', etc.

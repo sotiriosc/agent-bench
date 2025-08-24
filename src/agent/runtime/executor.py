@@ -94,3 +94,38 @@ try:
 except NameError:
     # If Executor isn't defined for some reason, just skip (no crash).
     pass
+
+# ---- Enhanced tool-first path ----------------------------------------------
+try:
+    from agent.tools.calculator import execute as _calc_execute
+except Exception:
+    _calc_execute = None
+try:
+    from agent.tools.clock import execute as _clock_execute
+except Exception:
+    _clock_execute = None
+try:
+    from agent.tools.stringy import execute as _string_execute
+except Exception:
+    _string_execute = None
+
+def _executor_run_tools(self, prompt: str) -> str:
+    """
+    Try known tools first; on any miss/failure, fall back to run().
+    Order chosen to minimize false positives.
+    """
+    for tool in (_calc_execute, _clock_execute, _string_execute):
+        if tool is None:
+            continue
+        try:
+            return tool(prompt)
+        except Exception:
+            pass
+    return self.run(prompt)
+
+# Attach/replace
+try:
+    Executor  # type: ignore[name-defined]
+    Executor.run_tools = _executor_run_tools  # type: ignore[attr-defined]
+except NameError:
+    pass
