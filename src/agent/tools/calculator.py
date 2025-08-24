@@ -1,186 +1,219 @@
 # src/agent/tools/calculator.py
-import ast
-import json
+from __future__ import annotations
+
 import os
 import re
+import ast
 import operator as _op
-from typing import Any
+from typing import Optional, Union, Any
 
-# ===========
-# Debug print
-# ===========
-def _dbg(*args):
-    if os.getenv("AGENT_DEBUG"):
-        print("[DEBUG calculator]", *args)
+# -----------------------------
+# Debug helper
+# -----------------------------
+def _dbg(msg: str) -> None:
+    if os.environ.get("AGENT_DEBUG"):
+        print(f"[DEBUG calculator] {msg}")
 
-# =========================
-# Safe arithmetic evaluator
-# =========================
-_ALLOWED_BIN_OPS = {
+# -----------------------------
+# Normalization
+# -----------------------------
+UNICODE_MAP = {
+    "−": "-",  # minus
+    "–": "-",  # en dash
+    "—": "-",  # em dash
+    "×": "*",  # multiply
+    "÷": "/",  # divide
+}
+
+def _normalize(s: str) -> str:
+    # unify common unicode math glyphs
+    for k, v in UNICODE_MAP.items():
+        s = s.replace(k, v)
+    # convert caret-power to Python's ** (common user expectation)
+    s = s.replace("^", "**")
+    # strip thousands separators when used as 1,234
+    s = re.sub(r"(?<=\d),(?=\d{3}\b)", "", s)
+    return s
+
+# -----------------------------
+# Limits / guards
+# -----------------------------
+MAX_EXP = 10          # max exponent magnitude
+MAX_ABS = 10 ** 12    # max base magnitude for exponentiation
+MAX_EXPR_LEN = 512    # overall expression text length
+
+# -----------------------------
+# Expression extraction
+# -----------------------------
+# Triggers like:
+#   [[calc: 23*17+88]]
+#   calc(23*17+88)
+#   CALCULATE: 23*17+88
+TRIGGERS = [
+    re.compile(r"\[\[\s*calc\s*:\s*([0-9.,+\-*/() \t^×÷]+)\]\]", re.I),
+    re.compile(r"\bcalc\s*\(\s*([0-9.,+\-*/() \t^×÷]+)\s*\)", re.I),
+    re.compile(r"\bcalculate\s*:\s*([0-9.,+\-*/() \t^×÷]+)", re.I),
+]
+
+# Generic arithmetic finder (captures a run of numbers/operators/parentheses)
+# After normalization this will include ** for power.
+# Note: permissive—relies on AST stage for safety.
+GENERIC_EXPR = re.compile(
+    r"(?P<expr>(?:\d[\d,]*\.?\d*|\.\d+|\(\s*|\)\s*|\s*[+\-*/]|(?:\s*\*\*)\s*)+)",
+    re.U,
+)
+
+def extract_expr(text: str) -> Optional[str]:
+    """
+    Try to pull a math expression out of arbitrary text.
+    Returns a normalized string or None if nothing plausible is found.
+    """
+    if not isinstance(text, str):
+        return None
+    raw = text
+    text = _normalize(text)
+
+    # Try explicit triggers first
+    for pat in TRIGGERS:
+        m = pat.search(raw) or pat.search(text)
+        if m:
+            expr = _normalize(m.group(1)).strip()
+            if expr:
+                if len(expr) > MAX_EXPR_LEN:
+                    raise ValueError("expression too long")
+                return expr
+
+    # Try generic expression finder
+    m = GENERIC_EXPR.search(text)
+    if m:
+        expr = m.group("expr").strip()
+        # Heuristic sanity check: must contain at least one digit & one operator-ish
+        if any(ch.isdigit() for ch in expr) and any(op in expr for op in ("+", "-", "*", "/", "(", ")")):
+            if len(expr) > MAX_EXPR_LEN:
+                raise ValueError("expression too long")
+            return expr
+
+    return None
+
+# -----------------------------
+# Safe evaluation (AST)
+# -----------------------------
+_ALLOWED_BINOPS = {
     ast.Add: _op.add,
     ast.Sub: _op.sub,
     ast.Mult: _op.mul,
     ast.Div: _op.truediv,
-    ast.Mod: _op.mod,
-    ast.Pow: _op.pow,
-    ast.FloorDiv: _op.floordiv,
+    # exponent handled specially to enforce caps
 }
-_ALLOWED_UNARY_OPS = {
+
+_ALLOWED_UNARYOPS = {
     ast.UAdd: _op.pos,
     ast.USub: _op.neg,
 }
-class _SafeEval(ast.NodeVisitor):
-    def visit_Expression(self, node):
-        return self.visit(node.body)
 
-    def visit_BinOp(self, node):
-        left = self.visit(node.left)
-        right = self.visit(node.right)
-        op_type = type(node.op)
-        if op_type not in _ALLOWED_BIN_OPS:
-            raise ValueError(f"disallowed operator: {op_type.__name__}")
-        return _ALLOWED_BIN_OPS[op_type](left, right)
+Number = Union[int, float]
 
-    def visit_UnaryOp(self, node):
-        operand = self.visit(node.operand)
-        op_type = type(node.op)
-        if op_type not in _ALLOWED_UNARY_OPS:
-            raise ValueError(f"disallowed unary operator: {op_type.__name__}")
-        return _ALLOWED_UNARY_OPS[op_type](operand)
-
-    def visit_Num(self, node):  # py<3.8
-        return node.n
-
-    def visit_Constant(self, node):  # py>=3.8
+def _safe_eval(node: ast.AST) -> Number:
+    # Numbers: Constant in py3.8+; Num for older ASTs
+    if isinstance(node, ast.Constant):
         if isinstance(node.value, (int, float)):
             return node.value
-        raise ValueError("only numeric constants allowed")
+        raise ValueError("invalid constant")
+    if isinstance(node, ast.Num):  # pragma: no cover (older versions)
+        return node.n  # type: ignore[attr-defined]
 
-    def generic_visit(self, node):
-        if isinstance(node, ast.Load):
-            return super().generic_visit(node)
-        forbidden = (
-            ast.Call, ast.Attribute, ast.Subscript, ast.Name, ast.List, ast.Tuple,
-            ast.Dict, ast.Set, ast.Compare, ast.BoolOp, ast.IfExp, ast.Lambda,
-            ast.JoinedStr, ast.FormattedValue,
-        )
-        if isinstance(node, forbidden):
-            raise ValueError(f"disallowed syntax: {type(node).__name__}")
-        return super().generic_visit(node)
+    # Parentheses
+    if isinstance(node, ast.Expression):
+        return _safe_eval(node.body)
 
-def safe_eval(expr: str) -> float:
-    tree = ast.parse(expr, mode="eval")
-    return _SafeEval().visit(tree)
+    # Unary +/-
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _ALLOWED_UNARYOPS:
+        val = _safe_eval(node.operand)
+        return _ALLOWED_UNARYOPS[type(node.op)](val)
 
-# =========================
-# Expression extraction
-# =========================
-_ALLOWED_CHARS = set("0123456789.+-*/()% \t")
+    # Binary operations
+    if isinstance(node, ast.BinOp):
+        # Intercept exponent first to apply limits
+        if isinstance(node.op, ast.Pow):
+            base = _safe_eval(node.left)
+            exp  = _safe_eval(node.right)
+            if not isinstance(base, (int, float)) or not isinstance(exp, (int, float)):
+                raise ValueError("invalid power")
+            if abs(exp) > MAX_EXP or abs(base) > MAX_ABS:
+                raise ValueError("expression too large")
+            return _op.pow(base, exp)
 
-_TRIGGER_PATTERNS = [
-    re.compile(r"\[\[\s*calc\s*:\s*(.+?)\s*\]\]", re.IGNORECASE | re.DOTALL),  # [[calc: ...]]
-    re.compile(r"\bcalc\s*\(\s*(.+?)\s*\)\s*$", re.IGNORECASE | re.DOTALL),     # calc(...)
-    re.compile(r"\bcalculate\s*:\s*(.+)$", re.IGNORECASE | re.DOTALL),          # CALCULATE: ...
-]
+        # Allowed simple ops
+        op_type = type(node.op)
+        if op_type in _ALLOWED_BINOPS:
+            left = _safe_eval(node.left)
+            right = _safe_eval(node.right)
+            return _ALLOWED_BINOPS[op_type](left, right)
 
-def _looks_like_flag(s: str) -> bool:
-    s = s.strip()
-    return s.startswith("-") and not any(ch.isdigit() for ch in s)
+        raise ValueError("operator not allowed")
 
-def _extract_from_triggers(s: str) -> str | None:
-    for pat in _TRIGGER_PATTERNS:
-        m = pat.search(s)
-        if m:
-            return m.group(1).strip()
-    return None
+    # Explicitly forbid everything else (names, calls, attrs, etc.)
+    raise ValueError("invalid expression")
 
-def _extract_expr_from_text(text: str) -> str | None:
-    s = text.strip()
-
-    # use triggers if present
-    t = _extract_from_triggers(s)
-    if t:
-        s = t
-
-    # already arithmetic?
-    if s and all(ch in _ALLOWED_CHARS for ch in s) and any(ch.isdigit() for ch in s):
-        return s
-
-    # clean to arithmetic-only
-    cleaned = "".join(ch for ch in s if ch in _ALLOWED_CHARS).strip()
-
-    # special-case: lone double dash (extractors sometimes grab it)
-    if cleaned == "--":
-        return "--"
-
-    # ignore true flags (let caller decide)
-    if _looks_like_flag(s):
-        return None
-
-    # must contain a digit and an operator to proceed
-    if cleaned and any(ch.isdigit() for ch in cleaned) and any(op in cleaned for op in "+-*/%"):
-        return cleaned
-
-    return None
-
-def _maybe_parse_json_string(s: str) -> Any | None:
-    s2 = s.strip()
-    if not (s2.startswith("{") and s2.endswith("}")):
-        return None
-    try:
-        return json.loads(s2)
-    except Exception:
-        return None
-
-# =========================
-# Public API
-# =========================
-def execute(text: Any) -> str:
+def evaluate(expr: str) -> Number:
     """
-    Accepts:
-      - simple math:           "23*17+88"
-      - questions:             "What is 23*17 + 88?"
-      - triggers:              [[calc: 23*17+88]], calc(23*17+88), "CALCULATE: 23*17+88"
-      - JSON/dict payloads:    {"expression":"..."}, {"args":{"expression":"..."}}
+    Evaluate a normalized arithmetic expression safely.
+    Raises ValueError with friendly messages.
     """
-    _dbg("type(text) =", type(text))
-    if isinstance(text, str):
-        _dbg("raw text (trunc):", repr(text[:120]))
+    if not isinstance(expr, str):
+        raise ValueError("invalid input")
 
-    expr = None
-
-    if isinstance(text, dict):
-        if "expression" in text:
-            expr = text["expression"]
-        elif "args" in text and isinstance(text["args"], dict) and "expression" in text["args"]:
-            expr = text["args"]["expression"]
-
-    elif isinstance(text, str):
-        payload = _maybe_parse_json_string(text)
-        if isinstance(payload, dict):
-            if "expression" in payload:
-                expr = payload["expression"]
-            elif "args" in payload and isinstance(payload["args"], dict) and "expression" in payload["args"]:
-                expr = payload["args"]["expression"]
-        else:
-            expr = _extract_expr_from_text(text)
-
-    _dbg("extracted expr:", expr)
-
-    # Friendly behavior for the extractor edge case "--"
-    if expr == "--":
-        return "--"
-
+    expr = _normalize(expr).strip()
     if not expr:
-        # Do NOT treat flags as math; surface a clear error so the router can skip us.
+        raise ValueError("no arithmetic expression found")
+    if len(expr) > MAX_EXPR_LEN:
+        raise ValueError("expression too long")
+
+    try:
+        tree = ast.parse(expr, mode="eval")
+        # Evaluate the body of the expression
+        result = _safe_eval(tree.body)
+    except ZeroDivisionError:
+        raise ValueError("division by zero")
+    except SyntaxError:
+        raise ValueError("invalid syntax")
+
+    # Prefer int if it's an exact integer (avoid 30.0)
+    if isinstance(result, float) and result.is_integer():
+        return int(result)
+    return result
+
+# -----------------------------
+# Public API expected by executor
+# -----------------------------
+def calc(text: Any) -> Number:
+    """
+    Main tool entry: parse out an expression from arbitrary text and evaluate it.
+    Raises ValueError('no arithmetic expression found') if none present.
+    """
+    _dbg(f"type(text) = {type(text)}")
+    if isinstance(text, str):
+        _dbg(f"raw text (trunc): {repr(text[:80])}")
+
+    if isinstance(text, str):
+        text_n = _normalize(text)
+    else:
+        text_n = text
+
+    expr = extract_expr(text if isinstance(text, str) else str(text))
+    _dbg(f"extracted expr: {expr!s}")
+
+    if expr is None:
         raise ValueError("no arithmetic expression found")
 
-    _dbg("final expr:", expr)
-    try:
-        result = safe_eval(expr)
-    except SyntaxError as e:
-        raise ValueError(f"invalid expression: {e}") from e
-    return str(result)
+    # Final normalize & evaluate
+    expr = _normalize(expr)
+    _dbg(f"final expr: {expr}")
 
-def calc(text: Any) -> str:
-    return execute(text)
+    return evaluate(expr)
+
+# Some codepaths/tests may call 'execute' (legacy). Keep it as a thin wrapper.
+def execute(text: Any) -> Number:
+    return calc(text)
+
+__all__ = ["extract_expr", "evaluate", "calc", "execute"]
