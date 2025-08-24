@@ -1,6 +1,7 @@
 import argparse
 import os
 import sys
+import json
 
 def main():
     parser = argparse.ArgumentParser()
@@ -12,21 +13,35 @@ def main():
                         help="Max tool passes (chaining). Default 1")
     parser.add_argument("--llm", action="store_true", help="Use LLM for fallback if no tool matches")
     parser.add_argument("--llm-only", action="store_true", help="Bypass tools and query the LLM directly")
+    parser.add_argument("--json", action="store_true", help="Emit JSON with {mode, tool, passes, text, usage}")
     parser.add_argument("message")
     args = parser.parse_args()
 
-    # Apply quiet BEFORE importing router so debug flags are respected
+    # Apply quiet BEFORE importing router/llm so debug flags are respected
     if args.quiet:
         os.environ.pop("AGENT_DEBUG", None)
 
     msg = args.message
 
+    def emit(payload_text: str, mode: str, tool: str | None, passes: int = 0, usage: dict | None = None, rc: int = 0):
+        if args.json:
+            print(json.dumps({
+                "mode": mode,           # "tools" or "llm" or "echo"
+                "tool": tool,           # e.g., "calculator" or None
+                "passes": passes,       # number of tool passes used
+                "text": payload_text,   # final output string
+                "usage": usage or {},   # LLM token usage if available
+                "rc": rc,               # intended exit code
+            }, ensure_ascii=False))
+        else:
+            print(payload_text)
+        sys.exit(rc)
+
     # LLM-only path
     if args.llm_only:
         from agent.runtime.llm_client import chat
-        text, _usage = chat(msg)
-        print(text)
-        sys.exit(0)
+        text, usage = chat(msg)
+        emit(text, mode="llm", tool=None, passes=0, usage=usage, rc=0)
 
     # Tools path
     if args.use_tools:
@@ -34,31 +49,31 @@ def main():
         out, used_tool, used_count = run_with_tools(msg, max_chain=max(1, args.chain))
 
         if used_tool:
-            print(out)
-            sys.exit(0)
+            emit(out, mode="tools", tool=used_tool, passes=used_count, rc=0)
 
         # No tool matched
         if args.tool_only and not args.llm:
-            print("No tool matched", file=sys.stderr)
+            if args.json:
+                print(json.dumps({"mode":"tools","tool":None,"passes":0,"text":"","usage":{},"rc":2}))
+            else:
+                print("No tool matched", file=sys.stderr)
             sys.exit(2)
 
         if args.llm:
             from agent.runtime.llm_client import chat
-            text, _usage = chat(msg)
-            print(text)
-            sys.exit(0)
+            text, usage = chat(msg)
+            emit(text, mode="llm", tool=None, passes=0, usage=usage, rc=0)
 
         # fallback echo
-        print(out)
-        sys.exit(0)
+        emit(out, mode="echo", tool=None, passes=0, rc=0)
 
     # No tools requested
     if args.llm:
         from agent.runtime.llm_client import chat
-        text, _usage = chat(msg)
-        print(text)
+        text, usage = chat(msg)
+        emit(text, mode="llm", tool=None, passes=0, usage=usage, rc=0)
     else:
-        print(msg)
+        emit(msg, mode="echo", tool=None, passes=0, rc=0)
 
 if __name__ == "__main__":
     main()
