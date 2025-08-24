@@ -2,8 +2,6 @@ import argparse
 import os
 import sys
 
-from agent.runtime.executor import Executor
-
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--use-tools", action="store_true", help="enable tool routing")
@@ -12,9 +10,12 @@ def main():
     parser.add_argument("message")
     args = parser.parse_args()
 
-    # Optionally mute DEBUG from tool code
+    # Apply quiet BEFORE importing Executor/router so their DEBUG checks see it
     if args.quiet:
         os.environ.pop("AGENT_DEBUG", None)
+
+    # Lazy import now that env is set the way we want
+    from agent.runtime.executor import Executor
 
     msg = args.message
     ex = Executor()
@@ -27,7 +28,6 @@ def main():
         if args.tool_only:
             print("No tool matched", file=sys.stderr)
             sys.exit(2)
-        # Fall back to plain chat output (already computed as `out`)
         print(out)
         sys.exit(0)
 
