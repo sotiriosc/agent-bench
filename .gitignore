@@ -36,3 +36,6 @@ Thumbs.db
 
 # Outputs
 results/
+__pycache__/
+*.pyc
+.venv/
