@@ -44,3 +44,53 @@ class Executor:
         if "one sentence" in lower and "project" in lower:
             return "This project is an agent benchmark framework for testing AI tool execution."
         return f"Echo: {prompt}"
+def run_tools(prompt: str) -> str:
+    """
+    Tool-first execution path.
+    - Tries known tools (calculator supports triggers + JSON/dict).
+    - On failure or no match, falls back to the normal run().
+    """
+    try:
+        from ..tools.calculator import execute as calc_execute
+    except Exception:
+        calc_execute = None
+
+    if calc_execute is not None:
+        try:
+            return calc_execute(prompt)
+        except Exception:
+            pass
+
+    try:
+        return run(prompt)  # type: ignore[name-defined]
+    except Exception:
+        try:
+            return Executor().run(prompt)  # type: ignore[name-defined]
+        except Exception as e:
+            raise e
+
+# ---- Tool-first path (attached at import time) ------------------------------
+try:
+    from agent.tools.calculator import execute as _calc_execute
+except Exception:
+    _calc_execute = None
+
+def _executor_run_tools(self, prompt: str) -> str:
+    """
+    Try known tools first (e.g., calculator); on any miss/failure, fall back to run().
+    """
+    if isinstance(prompt, str) and _calc_execute is not None:
+        try:
+            return _calc_execute(prompt)
+        except Exception:
+            pass
+    return self.run(prompt)
+
+# Attach once if missing
+try:
+    Executor  # type: ignore[name-defined]
+    if not hasattr(Executor, "run_tools"):
+        Executor.run_tools = _executor_run_tools  # type: ignore[attr-defined]
+except NameError:
+    # If Executor isn't defined for some reason, just skip (no crash).
+    pass
