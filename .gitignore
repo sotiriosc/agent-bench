@@ -1,15 +1,35 @@
 # Python
 __pycache__/
-*.pyc
-
-# Virtual env
-.venv/
-
-# Secrets
-.env
-
-# Results / caches
-results/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+pip-wheel-metadata/
+.mypy_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 .cache/
-wandb/
-huggingface/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Environment files
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+
+# VS Code / IDE
+.vscode/
+*.code-workspace
+.idea/
+
+# OS cruft
+.DS_Store
+Thumbs.db
+
