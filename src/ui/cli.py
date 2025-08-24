@@ -1,13 +1,15 @@
-import sys
+# cli.py
+import argparse
 from ..agent.runtime.executor import Executor
 
 def main():
-    if len(sys.argv) < 2:
-        print('Usage: python -m src.ui.cli "your question"')
-        raise SystemExit(1)
-    query = sys.argv[1]
-    ex = Executor()
-    print(ex.run(query))
+    p = argparse.ArgumentParser()
+    p.add_argument("--use-tools", action="store_true", help="Route through tool executor")
+    p.add_argument("message", help="User message / expression")  # positional instead of --message
+    args = p.parse_args()
+
+    ex = Executor(use_tools=args.use_tools)
+    print(ex.run(args.message))
 
 if __name__ == "__main__":
     main()
