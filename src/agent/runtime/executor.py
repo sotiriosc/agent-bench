@@ -161,3 +161,60 @@ try:
     Executor.run_tools = _executor_run_tools  # type: ignore[attr-defined]
 except NameError:
     pass
+
+# ---- Tool routing (tuple-return) --------------------------------------------
+# Reuse already-imported tool executes (_calc_execute, _clock_execute, etc.)
+# If they aren't present above, try to import here to be safe.
+def _maybe_import(name, attr="execute"):
+    try:
+        mod = __import__(f"agent.tools.{name}", fromlist=[attr])
+        return getattr(mod, attr, None)
+    except Exception:
+        return None
+
+globals().setdefault("_calc_execute",  _maybe_import("calculator"))
+globals().setdefault("_clock_execute", _maybe_import("clock"))
+globals().setdefault("_string_execute",_maybe_import("stringy"))
+globals().setdefault("_weather_execute",_maybe_import("weather"))
+globals().setdefault("_uuid_execute",  _maybe_import("uuid_tool"))
+globals().setdefault("_echo_execute",  _maybe_import("echo"))
+globals().setdefault("_help_execute",  _maybe_import("help_tool"))
+
+def _executor_run_with_tools(self, prompt: str):
+    """
+    Try known tools in order. If a tool matches, return (output, tool_name).
+    If none match or all fail, return (fallback_output, None) where fallback_output is run(prompt).
+    """
+    tools = [
+        ("calculator", _calc_execute),
+        ("clock",      _clock_execute),
+        ("string",     _string_execute),
+        ("weather",    _weather_execute),
+        ("uuid",       _uuid_execute),
+        ("echo",       _echo_execute),
+        ("help",       _help_execute),
+    ]
+    for name, fn in tools:
+        if fn is None:
+            continue
+        try:
+            out = fn(prompt)
+            return out, name
+        except Exception:
+            # "no match" or other tool-level errors -> try next tool
+            pass
+    # No tool matched -> fall back to plain run()
+    return self.run(prompt), None
+
+# Back-compat: run_tools keeps returning only the string (first element)
+def _executor_run_tools(self, prompt: str) -> str:
+    out, _name = _executor_run_with_tools(self, prompt)
+    return out
+
+# Attach/overwrite onto Executor
+try:
+    Executor  # type: ignore[name-defined]
+    Executor.run_with_tools = _executor_run_with_tools  # type: ignore[attr-defined]
+    Executor.run_tools = _executor_run_tools            # type: ignore[attr-defined]
+except NameError:
+    pass
