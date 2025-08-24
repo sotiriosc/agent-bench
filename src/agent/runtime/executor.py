@@ -218,3 +218,36 @@ try:
     Executor.run_tools = _executor_run_tools            # type: ignore[attr-defined]
 except NameError:
     pass
+
+# ---- Router delegation: prefer central auto-discovery -----------------------
+try:
+    from agent.runtime.router import run_with_tools as _router_run_with_tools
+except Exception:
+    _router_run_with_tools = None
+
+def _executor_run_with_tools(self, prompt: str):
+    """
+    Delegate to router.run_with_tools(prompt, max_chain=1).
+    Returns (output, tool_name_or_None).
+    """
+    if _router_run_with_tools is None:
+        # Fallback: behave like plain run()
+        return self.run(prompt), None
+    out, name, _used = _router_run_with_tools(prompt, max_chain=1)
+    return out, name
+
+def _executor_run_tools(self, prompt: str) -> str:
+    """
+    Back-compat wrapper that returns only the output string.
+    """
+    if _router_run_with_tools is None:
+        return self.run(prompt)
+    out, _name, _used = _router_run_with_tools(prompt, max_chain=1)
+    return out
+
+try:
+    Executor  # type: ignore[name-defined]
+    Executor.run_with_tools = _executor_run_with_tools  # type: ignore[attr-defined]
+    Executor.run_tools = _executor_run_tools            # type: ignore[attr-defined]
+except NameError:
+    pass

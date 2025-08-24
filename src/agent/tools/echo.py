@@ -6,9 +6,8 @@ def _dbg(*a):
     if DEBUG: print("[DEBUG echo]", *a)
 
 TRIGGERS = [
-    r"\[\[\s*echo\s*:\s*(?P<text>.+?)\s*\]\]",   # [[echo: hello]]
-    r"^echo\s*:\s*(?P<text>.+)$",                # echo: hello
-    r"\becho\(\s*(?P<text>[^)]+)\s*\)",         # echo(hello)
+    r"(?s)^\[\[\s*echo\s*:\s*(?P<msg>.+)\s*\]\]\s*$",  # [[echo: ...]] (capture until the final closing ]])
+    r"^\s*echo\s*:\s*(?P<msg>.+)\s*$",                 # echo: ... (whole line)
 ]
 
 def _maybe_json(text: str) -> Optional[Dict[str, Any]]:
@@ -37,12 +36,23 @@ def _extract_from_payload(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 def execute(text: Any) -> str:
+    # Normalize input to string
     s = text if isinstance(text, str) else str(text)
-    if isinstance(text, str):
-        t = text.strip()
-        if t.startswith("-") and not any(ch.isalnum() for ch in t):
-            _dbg("ignoring flag-like input:", t)
-            raise ValueError("no match")
+
+    # JSON trigger form
+    j = _maybe_json(s)
+    if j and j.get("tool") in {"echo"}:
+        return str((j.get("args") or {}).get("text", ""))
+
+    # Regex triggers
+    for pat in TRIGGERS:
+        m = re.search(pat, s, re.IGNORECASE)
+        if m:
+            return m.group("msg")
+
+    # IMPORTANT: raise when no trigger matched
+    raise ValueError("No echo trigger matched")
+
 
     # JSON
     payload = _maybe_json(s)
