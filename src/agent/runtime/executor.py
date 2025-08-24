@@ -75,27 +75,8 @@ try:
 except Exception:
     _calc_execute = None
 
-def _executor_run_tools(self, prompt: str) -> str:
-    """
-    Try known tools first (e.g., calculator); on any miss/failure, fall back to run().
-    """
-    if isinstance(prompt, str) and _calc_execute is not None:
-        try:
-            return _calc_execute(prompt)
-        except Exception:
-            pass
-    return self.run(prompt)
 
-# Attach once if missing
-try:
-    Executor  # type: ignore[name-defined]
-    if not hasattr(Executor, "run_tools"):
-        Executor.run_tools = _executor_run_tools  # type: ignore[attr-defined]
-except NameError:
-    # If Executor isn't defined for some reason, just skip (no crash).
-    pass
-
-# ---- Enhanced tool-first path ----------------------------------------------
+# ---- Multi-tool run_tools attachment (weather/uuid/echo added) --------------
 try:
     from agent.tools.calculator import execute as _calc_execute
 except Exception:
@@ -108,13 +89,65 @@ try:
     from agent.tools.stringy import execute as _string_execute
 except Exception:
     _string_execute = None
+try:
+    from agent.tools.weather import execute as _weather_execute
+except Exception:
+    _weather_execute = None
+try:
+    from agent.tools.uuid_tool import execute as _uuid_execute
+except Exception:
+    _uuid_execute = None
+try:
+    from agent.tools.echo import execute as _echo_execute
+except Exception:
+    _echo_execute = None
+
+
+# ---- Tool routing: single source of truth -----------------------------------
+try:
+    from agent.tools.calculator import execute as _calc_execute
+except Exception:
+    _calc_execute = None
+try:
+    from agent.tools.clock import execute as _clock_execute
+except Exception:
+    _clock_execute = None
+try:
+    from agent.tools.stringy import execute as _string_execute
+except Exception:
+    _string_execute = None
+try:
+    from agent.tools.weather import execute as _weather_execute
+except Exception:
+    _weather_execute = None
+try:
+    from agent.tools.uuid_tool import execute as _uuid_execute
+except Exception:
+    _uuid_execute = None
+try:
+    from agent.tools.echo import execute as _echo_execute
+except Exception:
+    _echo_execute = None
+# Optional help tool
+try:
+    from agent.tools.help_tool import execute as _help_execute  # type: ignore
+except Exception:
+    _help_execute = None
 
 def _executor_run_tools(self, prompt: str) -> str:
     """
     Try known tools first; on any miss/failure, fall back to run().
     Order chosen to minimize false positives.
     """
-    for tool in (_calc_execute, _clock_execute, _string_execute):
+    for tool in (
+        _calc_execute,
+        _clock_execute,
+        _string_execute,
+        _weather_execute,
+        _uuid_execute,
+        _echo_execute,
+        _help_execute,
+    ):
         if tool is None:
             continue
         try:
@@ -123,7 +156,6 @@ def _executor_run_tools(self, prompt: str) -> str:
             pass
     return self.run(prompt)
 
-# Attach/replace
 try:
     Executor  # type: ignore[name-defined]
     Executor.run_tools = _executor_run_tools  # type: ignore[attr-defined]
