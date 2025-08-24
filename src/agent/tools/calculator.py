@@ -55,13 +55,22 @@ TRIGGERS = [
     re.compile(r"\bcalculate\s*:\s*([0-9.,+\-*/() \t^×÷]+)", re.I),
 ]
 
-# Generic arithmetic finder (captures a run of numbers/operators/parentheses)
-# After normalization this will include ** for power.
-# Note: permissive—relies on AST stage for safety.
+# Generic arithmetic finder that tolerates spaces *between* tokens.
+# We allow sequences of (number|op|paren) surrounded by optional whitespace.
 GENERIC_EXPR = re.compile(
-    r"(?P<expr>(?:\d[\d,]*\.?\d*|\.\d+|\(\s*|\)\s*|\s*[+\-*/]|(?:\s*\*\*)\s*)+)",
+    r"(?P<expr>(?:\s*(?:\d[\d,]*\.?\d*|\.\d+|\(|\)|\*{1,2}|\/|\+|\-)\s*)+)",
     re.U,
 )
+
+def _longest_match(pattern: re.Pattern, text: str) -> Optional[str]:
+    best = None
+    best_len = -1
+    for m in pattern.finditer(text):
+        seg = m.group("expr")
+        if seg and len(seg) > best_len:
+            best = seg
+            best_len = len(seg)
+    return best
 
 def extract_expr(text: str) -> Optional[str]:
     """
@@ -73,7 +82,7 @@ def extract_expr(text: str) -> Optional[str]:
     raw = text
     text = _normalize(text)
 
-    # Try explicit triggers first
+    # Try explicit triggers first (against raw and normalized)
     for pat in TRIGGERS:
         m = pat.search(raw) or pat.search(text)
         if m:
@@ -83,15 +92,17 @@ def extract_expr(text: str) -> Optional[str]:
                     raise ValueError("expression too long")
                 return expr
 
-    # Try generic expression finder
-    m = GENERIC_EXPR.search(text)
-    if m:
-        expr = m.group("expr").strip()
-        # Heuristic sanity check: must contain at least one digit & one operator-ish
+    # Try generic expression finder: take the longest plausible span
+    candidate = _longest_match(GENERIC_EXPR, text)
+    if candidate:
+        expr = candidate.strip()
+        # Heuristic sanity: must contain a digit and at least one operator/paren
         if any(ch.isdigit() for ch in expr) and any(op in expr for op in ("+", "-", "*", "/", "(", ")")):
             if len(expr) > MAX_EXPR_LEN:
                 raise ValueError("expression too long")
-            return expr
+            # If trailing operator snuck in (e.g., '23*17 +'), trim it
+            expr = re.sub(r"[\+\-\*/\*]{1,2}\s*$", "", expr).strip()
+            return expr or None
 
     return None
 
@@ -171,20 +182,19 @@ def evaluate(expr: str) -> Number:
 
     try:
         tree = ast.parse(expr, mode="eval")
-        # Evaluate the body of the expression
-        result = _safe_eval(tree.body)
+        result = _safe_eval(tree.body)  # evaluate expression body
     except ZeroDivisionError:
         raise ValueError("division by zero")
     except SyntaxError:
         raise ValueError("invalid syntax")
 
-    # Prefer int if it's an exact integer (avoid 30.0)
+    # Prefer int if exact
     if isinstance(result, float) and result.is_integer():
         return int(result)
     return result
 
 # -----------------------------
-# Public API expected by executor
+# Public API expected by executor / tests
 # -----------------------------
 def calc(text: Any) -> Number:
     """
@@ -195,25 +205,44 @@ def calc(text: Any) -> Number:
     if isinstance(text, str):
         _dbg(f"raw text (trunc): {repr(text[:80])}")
 
-    if isinstance(text, str):
-        text_n = _normalize(text)
-    else:
-        text_n = text
+    # If dict/json payloads are passed, extract the expression
+    if isinstance(text, dict):
+        if "expression" in text:
+            expr = text["expression"]
+        elif "args" in text and isinstance(text["args"], dict) and "expression" in text["args"]:
+            expr = text["args"]["expression"]
+        else:
+            raise ValueError("no arithmetic expression found")
+        if not isinstance(expr, str):
+            raise ValueError("invalid input")
+        expr = _normalize(expr).strip()
+        if not expr:
+            raise ValueError("no arithmetic expression found")
+        if len(expr) > MAX_EXPR_LEN:
+            raise ValueError("expression too long")
+        _dbg(f"extracted expr: {expr!s}")
+        _dbg(f"final expr: {expr}")
+        return evaluate(expr)
 
+    # Otherwise treat as free-form text
     expr = extract_expr(text if isinstance(text, str) else str(text))
     _dbg(f"extracted expr: {expr!s}")
 
     if expr is None:
         raise ValueError("no arithmetic expression found")
 
-    # Final normalize & evaluate
     expr = _normalize(expr)
     _dbg(f"final expr: {expr}")
 
     return evaluate(expr)
 
-# Some codepaths/tests may call 'execute' (legacy). Keep it as a thin wrapper.
-def execute(text: Any) -> Number:
-    return calc(text)
+# Legacy/expected public name from tests/CLI: return **string** here.
+def execute(text: Any) -> str:
+    """
+    Compatibility wrapper: behaves like calc but returns a STRING result.
+    Supports dict payloads with {"expression": "..."}.
+    """
+    result = calc(text)
+    return str(result)
 
 __all__ = ["extract_expr", "evaluate", "calc", "execute"]

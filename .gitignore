@@ -39,3 +39,12 @@ results/
 __pycache__/
 *.pyc
 .venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.venv/
+.DS_Store
+.idea/
+.vscode/
+src/agent/tools/calculator.py.bak
