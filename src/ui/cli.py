@@ -14,6 +14,9 @@ def main():
     parser.add_argument("--llm", action="store_true", help="Use LLM for fallback if no tool matches")
     parser.add_argument("--llm-only", action="store_true", help="Bypass tools and query the LLM directly")
     parser.add_argument("--json", action="store_true", help="Emit JSON with {mode, tool, passes, text, usage}")
+    parser.add_argument("--base", help="OpenAI-compatible base URL (e.g., http://127.0.0.1:8000/v1)")
+    parser.add_argument("--model", help="Model name (e.g., Qwen/Qwen2.5-7B-Instruct)")
+    parser.add_argument("--ctx-file", help="Path to a context file to prepend for LLM paths")
     parser.add_argument("message")
     args = parser.parse_args()
 
@@ -39,7 +42,16 @@ def main():
 
     # LLM-only path
     if args.llm_only:
+        import os
+        if args.base: os.environ["OPENAI_BASE"] = args.base
+        if args.model: os.environ["OPENAI_MODEL"] = args.model
         from agent.runtime.llm_client import chat
+        if args.ctx_file:
+            try:
+                ctx = Path(args.ctx_file).read_text(encoding="utf-8")
+                msg = f"Context:\n{ctx}\n\nUser:\n{msg}"
+            except Exception:
+                pass
         text, usage = chat(msg)
         emit(text, mode="llm", tool=None, passes=0, usage=usage, rc=0)
 
@@ -60,7 +72,10 @@ def main():
             sys.exit(2)
 
         if args.llm:
-            from agent.runtime.llm_client import chat
+            import os
+        if args.base: os.environ["OPENAI_BASE"] = args.base
+        if args.model: os.environ["OPENAI_MODEL"] = args.model
+        from agent.runtime.llm_client import chat
             text, usage = chat(msg)
             emit(text, mode="llm", tool=None, passes=0, usage=usage, rc=0)
 
@@ -69,7 +84,16 @@ def main():
 
     # No tools requested
     if args.llm:
+        import os
+        if args.base: os.environ["OPENAI_BASE"] = args.base
+        if args.model: os.environ["OPENAI_MODEL"] = args.model
         from agent.runtime.llm_client import chat
+        if args.ctx_file:
+            try:
+                ctx = Path(args.ctx_file).read_text(encoding="utf-8")
+                msg = f"Context:\n{ctx}\n\nUser:\n{msg}"
+            except Exception:
+                pass
         text, usage = chat(msg)
         emit(text, mode="llm", tool=None, passes=0, usage=usage, rc=0)
     else:

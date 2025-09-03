@@ -1,3 +1,4 @@
+TOOL_NAME = "uuid"
 import os, re, json, uuid
 from typing import Any, Dict, Optional
 

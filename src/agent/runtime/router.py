@@ -50,7 +50,7 @@ def discover_tools() -> Dict[str, Tool]:
         if not callable(exec_fn):
             _dbg("Skip", base, "no execute()")
             continue
-        name = os.path.splitext(base)[0]  # filename becomes primary tool name
+        name = getattr(mod, "TOOL_NAME", os.path.splitext(base)[0])  # prefer module TOOL_NAME
         tool = Tool(name=name, module=mod, execute=exec_fn)
         # Register primary and aliases (lowercased)
         for key in tool.aliases:

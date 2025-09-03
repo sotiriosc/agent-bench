@@ -1,3 +1,4 @@
+TOOL_ALIASES = ["string", "stringy"]
 import os, re, json
 from typing import Any, Dict, Optional
 
